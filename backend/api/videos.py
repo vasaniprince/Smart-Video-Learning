@@ -1,6 +1,6 @@
 # backend/api/videos.py
 from fastapi import APIRouter, UploadFile, File, HTTPException, BackgroundTasks, Form
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse,StreamingResponse
 from typing import List, Optional
 import os
 import uuid
@@ -11,9 +11,65 @@ from models.video import (
     VideoUploadResponse,
     VideoMetadata,
     VideoStatus,
-    VideoWithScenes
+    VideoWithScenes,
+    Scene  # Add Scene import
 )
-from services.video_processor import VideoProcessor
+# Use simplified processor for testing (comment out the original)
+# from services.video_processor import VideoProcessor
+
+# Create a simple inline processor to avoid import issues
+class VideoProcessor:
+    def __init__(self):
+        pass
+        
+    async def process_video(self, file_path: str, metadata):
+        """
+        Simplified video processing for testing (without VideoDB)
+        """
+        import asyncio
+        from models.video import Scene, VideoWithScenes
+        
+        try:
+            # Update status
+            metadata.status = VideoStatus.PROCESSING
+            
+            # Simulate processing time
+            await asyncio.sleep(2)
+            
+            # Mock transcript
+            transcript = f"This is a mock transcript for the educational video: {metadata.title}. " \
+                        f"It contains educational content about {metadata.subject or 'various topics'}."
+            
+            # Mock scenes
+            mock_scenes = []
+            for i in range(5):  # Create 5 mock scenes
+                scene = Scene(
+                    id=f"scene_{i}",
+                    start_time=i * 30,
+                    end_time=(i + 1) * 30,
+                    description=f"Educational segment {i + 1} covering {metadata.subject or 'general'} concepts",
+                    audio_transcript=f"Mock transcript for scene {i + 1}",
+                    labels=["educational-content", metadata.subject or "general"],
+                    confidence_score=0.8
+                )
+                mock_scenes.append(scene)
+            
+            # Mock duration
+            metadata.duration = 150.0  # 2.5 minutes
+            
+            # Update status to indexed
+            metadata.status = VideoStatus.INDEXED
+            metadata.updated_at = datetime.now()
+            
+            return VideoWithScenes(
+                metadata=metadata,
+                scenes=mock_scenes,
+                transcript=transcript
+            )
+            
+        except Exception as e:
+            metadata.status = VideoStatus.FAILED
+            raise Exception(f"Video processing failed: {str(e)}")
 from config import settings
 
 router = APIRouter(tags=["videos"], prefix="/api/videos")
@@ -28,9 +84,7 @@ videos_db = {}
     "/upload",
     response_model=VideoUploadResponse,
     summary="Upload a video file",
-    description="Upload and process a video file for educational content extraction",
-    tags=["videos"],
-    operation_id="upload_video"
+    description="Upload and process a video file for educational content extraction"
 )
 async def upload_video(
     background_tasks: BackgroundTasks,
@@ -52,17 +106,21 @@ async def upload_video(
     """
     
     # Validate file
-    if not file.content_type.startswith('video/'):
+    if not file.content_type or not file.content_type.startswith('video/'):
         raise HTTPException(status_code=400, detail="File must be a video")
     
     try:
-        file_size = os.fstat(file.file.fileno()).st_size
+        # Read file content to check size
+        content = await file.read()
+        file_size = len(content)
+        
         if file_size > settings.MAX_FILE_SIZE:
-            raise HTTPException(status_code=400, detail="File too large")
+            raise HTTPException(status_code=400, detail=f"File too large. Max size: {settings.MAX_FILE_SIZE/1024/1024:.1f}MB")
     except Exception as e:
         print(f"Error checking file size: {e}")
-        # Continue if we can't check size
-        pass
+        # Reset file pointer
+        await file.seek(0)
+        content = await file.read()
     
     # Generate unique video ID
     video_id = str(uuid.uuid4())
@@ -75,7 +133,6 @@ async def upload_video(
     
     try:
         with open(file_path, "wb") as buffer:
-            content = await file.read()
             buffer.write(content)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to save file: {str(e)}")
@@ -107,24 +164,35 @@ async def upload_video(
         message="Video uploaded successfully. Processing will begin shortly."
     )
 
-
-
 async def process_video_background(video_id: str, file_path: str, metadata: VideoMetadata):
     """Background task to process video"""
     try:
+        print(f"Starting video processing for {video_id}")
+        
+        # Update status to processing
+        metadata.status = VideoStatus.PROCESSING
+        videos_db[video_id] = metadata
+        print(f"Updated status to PROCESSING for {video_id}")
+        
         # Process video
         processed_video = await video_processor.process_video(file_path, metadata)
         
         # Update database
         videos_db[video_id] = processed_video.metadata
         
-        print(f"Video {video_id} processed successfully")
+        print(f"Video {video_id} processed successfully with status: {processed_video.metadata.status}")
         
     except Exception as e:
+        print(f"Video processing failed for {video_id}: {str(e)}")
+        print(f"Error type: {type(e)}")
+        import traceback
+        traceback.print_exc()
+        
         # Update status to failed
         metadata.status = VideoStatus.FAILED
+        metadata.updated_at = datetime.now()
         videos_db[video_id] = metadata
-        print(f"Video processing failed for {video_id}: {str(e)}")
+        print(f"Updated status to FAILED for {video_id}")
 
 @router.get("/", response_model=List[VideoMetadata])
 async def list_videos(
@@ -230,147 +298,28 @@ async def get_video_status(video_id: str):
         "updated_at": video_metadata.updated_at
     }
 
-# backend/app/api/search.py
-from fastapi import APIRouter, HTTPException, Query
-from typing import List, Optional
-import asyncio
-
-from models.query import SearchQuery, SearchResponse, SearchResult
-from services.semantic_search import SemanticSearchService
-from services.llm_service import LLMService
-
-router = APIRouter()
-search_service = SemanticSearchService()
-llm_service = LLMService()
-
-@router.post("/", response_model=SearchResponse)
-async def search_scenes(query: SearchQuery):
-    """Search for educational video scenes based on natural language query"""
+@router.get("/{video_id}/play/{scene_id}")
+async def get_playback_info(video_id: str, scene_id: str):
+    """Get video playback information for a scene"""
+    if video_id not in videos_db:
+        raise HTTPException(status_code=404, detail="Video not found")
     
-    try:
-        # Perform semantic search
-        results = await search_service.search_scenes(query)
-        return results
-        
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Search failed: {str(e)}")
-
-@router.get("/suggest")
-async def get_search_suggestions(
-    q: str = Query(..., description="Partial query for suggestions"),
-    limit: int = Query(5, description="Maximum number of suggestions")
-):
-    """Get search suggestions based on partial query"""
+    video_metadata = videos_db[video_id]
     
-    try:
-        # Generate suggestions using LLM
-        prompt = f"""
-        A student is typing a search query: "{q}"
-        
-        Suggest {limit} complete educational questions they might be trying to ask.
-        Focus on common learning needs and make them specific and helpful.
-        
-        Return as a simple list, one suggestion per line.
-        """
-        
-        suggestions_response = await llm_service.generate_response(prompt)
-        suggestions = [s.strip() for s in suggestions_response.split('\n') if s.strip()]
-        
-        return {"query": q, "suggestions": suggestions[:limit]}
-        
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Suggestion generation failed: {str(e)}")
-
-@router.get("/related/{video_id}/{scene_id}")
-async def get_related_scenes(
-    video_id: str,
-    scene_id: str,
-    limit: int = Query(5, description="Maximum number of related scenes")
-):
-    """Get scenes related to a specific scene"""
-    
-    try:
-        related_scenes = await search_service.find_related_scenes(scene_id, video_id, limit)
-        
-        return {
-            "source_scene": {"video_id": video_id, "scene_id": scene_id},
-            "related_scenes": related_scenes,
-            "total_found": len(related_scenes)
-        }
-        
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Related scenes search failed: {str(e)}")
-
-@router.post("/analyze-intent")
-async def analyze_query_intent(query: str):
-    """Analyze the learning intent behind a search query"""
-    
-    try:
-        intent_analysis = await llm_service.classify_question_intent(query)
-        
-        return {
-            "query": query,
-            "analysis": intent_analysis
-        }
-        
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Intent analysis failed: {str(e)}")
-
-@router.get("/topics")
-async def get_popular_topics():
-    """Get popular search topics and subjects"""
-    
-    # In production, this would analyze actual search data
-    popular_topics = [
-        {"topic": "Physics Demonstrations", "count": 45, "category": "science"},
-        {"topic": "Mathematical Problem Solving", "count": 38, "category": "mathematics"},
-        {"topic": "Chemistry Experiments", "count": 32, "category": "science"},
-        {"topic": "Programming Tutorials", "count": 29, "category": "technology"},
-        {"topic": "Historical Analysis", "count": 25, "category": "humanities"},
-        {"topic": "Language Learning", "count": 22, "category": "language"},
-        {"topic": "Art Techniques", "count": 18, "category": "arts"},
-        {"topic": "Biology Concepts", "count": 16, "category": "science"}
-    ]
-    
-    return {"popular_topics": popular_topics}
-
-@router.get("/subjects")
-async def get_available_subjects():
-    """Get list of available subjects from processed videos"""
-    
-    # In production, query database for unique subjects
-    from api.videos import videos_db
-    
-    subjects = set()
-    for video in videos_db.values():
-        if video.subject:
-            subjects.add(video.subject)
-    
-    return {"subjects": sorted(list(subjects))}
-
-@router.post("/feedback")
-async def submit_search_feedback(
-    query: str,
-    scene_id: str,
-    video_id: str,
-    helpful: bool,
-    feedback_text: Optional[str] = None
-):
-    """Submit feedback on search results for improvement"""
-    
-    # In production, store this feedback for model improvement
-    feedback_data = {
-        "query": query,
-        "scene_id": scene_id,
-        "video_id": video_id,
-        "helpful": helpful,
-        "feedback_text": feedback_text,
-        "timestamp": datetime.now()
+    # Mock scene data - replace with actual scene loading
+    scene_data = {
+        "start_time": 0,
+        "end_time": 30,
+        "description": "Educational content"
     }
     
-    # For demo, just log it
-    print(f"Search feedback received: {feedback_data}")
-    
-    return {"message": "Feedback received successfully"}
-
-from datetime import datetime
+    return {
+        "success": True,
+        "video_id": video_id,
+        "scene_id": scene_id,
+        "video_file": video_metadata.file_path,
+        "video_url": f"/api/videos/{video_id}/stream",
+        "start_time": scene_data["start_time"],
+        "end_time": scene_data["end_time"],
+        "title": video_metadata.title
+    }

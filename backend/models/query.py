@@ -5,11 +5,13 @@ from datetime import datetime
 
 class SearchQuery(BaseModel):
     query: str
-    video_id: Optional[str] = None
-    subject_filter: Optional[str] = None
-    difficulty_filter: Optional[str] = None
+    video_ids: Optional[List[str]] = None  # Changed from video_id
+    subject_filters: Optional[List[str]] = None  # Changed from subject_filter
+    difficulty_filters: Optional[List[str]] = None  # Changed from difficulty_filter
+    scene_types: Optional[List[str]] = None  # Added
     max_results: int = 5
     min_confidence: float = 0.5
+    include_context: bool = True  # Added
 
 class SearchResult(BaseModel):
     scene_id: str

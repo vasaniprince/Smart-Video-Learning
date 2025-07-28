@@ -22,6 +22,9 @@ class APIClient:
             
         except requests.exceptions.RequestException as e:
             st.error(f"API request failed: {str(e)}")
+            print(f"Request URL: {url}")
+            print(f"Request method: {method}")
+            print(f"Request kwargs: {kwargs}")
             return None
         except json.JSONDecodeError:
             st.error("Invalid response format from server")
@@ -70,16 +73,19 @@ class APIClient:
             "query": query_params.get("query", ""),
             "max_results": query_params.get("max_results", 5),
             "min_confidence": query_params.get("min_confidence", 0.5),
-            "video_id": query_params.get("video_id"),
-            "subject_filter": query_params.get("subject_filter"),
-            "difficulty_filter": query_params.get("difficulty_filter")
+            "video_ids": [query_params.get("video_id")] if query_params.get("video_id") else None,
+            "subject_filters": [query_params.get("subject_filter")] if query_params.get("subject_filter") else None,
+            "difficulty_filters": [query_params.get("difficulty_filter")] if query_params.get("difficulty_filter") else None
         }
+        # Remove None values
+        search_query = {k: v for k, v in search_query.items() if v is not None}
+        
         return self._make_request('POST', '/api/search/', json=search_query)
     
     def get_search_suggestions(self, query: str, limit: int = 5) -> Optional[Dict[str, Any]]:
         """Get search suggestions"""
-        params = {'q': query, 'limit': limit}
-        return self._make_request('GET', '/api/search/suggest', params=params)
+        params = {'query': query, 'limit': limit}
+        return self._make_request('GET', '/api/search/suggestions', params=params)
     
     def get_related_scenes(self, video_id: str, scene_id: str, limit: int = 5) -> Optional[Dict[str, Any]]:
         """Get related scenes"""
@@ -88,15 +94,15 @@ class APIClient:
     
     def submit_feedback(self, feedback_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """Submit search feedback"""
-        # Backend expects individual parameters, not nested json
-        params = {
-            'query': feedback_data.get('query', ''),
-            'scene_id': feedback_data.get('scene_id', ''),
-            'video_id': feedback_data.get('video_id', ''),
-            'helpful': feedback_data.get('helpful', False),
-            'feedback_text': feedback_data.get('feedback_text')
+        # Create UserFeedback object
+        feedback_obj = {
+            "query": feedback_data.get('query', ''),
+            "scene_id": feedback_data.get('scene_id', ''),
+            "video_id": feedback_data.get('video_id', ''),
+            "helpful": feedback_data.get('helpful', False),
+            "feedback_text": feedback_data.get('feedback_text')
         }
-        return self._make_request('POST', '/api/search/feedback', params=params)
+        return self._make_request('POST', '/api/search/feedback', json=feedback_obj)
     
     def get_popular_topics(self) -> Optional[Dict[str, Any]]:
         """Get popular search topics"""
@@ -104,5 +110,4 @@ class APIClient:
     
     def analyze_query_intent(self, query: str) -> Optional[Dict[str, Any]]:
         """Analyze search query intent"""
-        params = {'query': query}
-        return self._make_request('POST', '/api/search/analyze-intent', params=params)
+        return self._make_request('POST', '/api/search/analyze-intent', json={"query": query})

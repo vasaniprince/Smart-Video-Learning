@@ -2,7 +2,7 @@ import streamlit as st
 from typing import Dict, Any, Optional
 
 class VideoPlayer:
-    def render_player(self, scene_data: Dict[str, Any]):
+    def render_player(self, scene_data: Dict[str, Any], video_metadata: Optional[Dict[str, Any]] = None):
         """Render video player for selected scene"""
         if not scene_data:
             return

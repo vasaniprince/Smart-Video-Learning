@@ -74,6 +74,14 @@ st.markdown("""
         border-radius: 8px;
         margin: 1rem 0;
     }
+    
+    .video-player-container {
+        background: #f8f9fa;
+        border-radius: 8px;
+        padding: 1rem;
+        margin: 1rem 0;
+        border: 2px solid #667eea;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -94,6 +102,8 @@ class VideoLearningApp:
             st.session_state.selected_scene = None
         if 'videos_list' not in st.session_state:
             st.session_state.videos_list = []
+        if 'show_video_player' not in st.session_state:
+            st.session_state.show_video_player = False
     
     def run(self):
         """Main application runner"""
@@ -110,6 +120,11 @@ class VideoLearningApp:
         
         # Main content area
         self.render_main_content()
+        
+        # Always show video player if scene is selected
+        if st.session_state.selected_scene:
+            st.markdown("---")
+            self.render_video_player_section()
     
     def render_sidebar(self):
         """Render sidebar with navigation and controls"""
@@ -121,6 +136,19 @@ class VideoLearningApp:
                 ["🔍 Search Videos", "📤 Upload Video", "📚 My Videos", "📈 Analytics"],
                 key="navigation"
             )
+            
+            st.markdown("---")
+            
+            # Video player controls (if scene is selected)
+            if st.session_state.selected_scene:
+                st.markdown("### 🎥 Now Playing")
+                scene = st.session_state.selected_scene
+                st.markdown(f"**Video:** {scene.get('video_title', 'Educational Video')}")
+                st.markdown(f"**Time:** {self.format_time(scene.get('start_time', 0))} - {self.format_time(scene.get('end_time', 30))}")
+                
+                if st.button("❌ Close Player"):
+                    st.session_state.selected_scene = None
+                    st.rerun()
             
             st.markdown("---")
             
@@ -213,66 +241,26 @@ class VideoLearningApp:
         if st.session_state.get('search_results'):
             self.results_display.render_results(st.session_state.search_results)
     
-    def display_search_results(self, results: Dict[str, Any]):
-        """Display search results"""
-        st.markdown("---")
-        st.markdown(f"## 📋 Search Results ({results.get('total_results', 0)} found)")
+    def render_video_player_section(self):
+        """Render video player section when scene is selected"""
+        st.markdown('<div class="video-player-container">', unsafe_allow_html=True)
         
-        if not results.get('results'):
-            st.info("No results found. Try different keywords or check if videos are processed.")
-            return
+        # Get video file information
+        scene = st.session_state.selected_scene
+        video_id = scene.get('video_id')
         
-        for i, result in enumerate(results['results']):
-            with st.container():
-                st.markdown(f"""
-                <div class="search-result">
-                    <h4>🎬 {result.get('video_title', 'Educational Video')}</h4>
-                    <p><span class="timestamp">{self.format_time(result.get('start_time', 0))} - {self.format_time(result.get('end_time', 30))}</span></p>
-                    <p><strong>Description:</strong> {result.get('scene', {}).get('description', 'Educational content')}</p>
-                    <p><strong>Why this helps:</strong> {result.get('explanation', 'This segment contains relevant educational content.')}</p>
-                </div>
-                """, unsafe_allow_html=True)
-                
-                # Scene labels
-                labels = result.get('scene', {}).get('labels', [])
-                if labels:
-                    st.markdown("**Topics:** " + " ".join([f'<span class="scene-label">{label}</span>' for label in labels]), unsafe_allow_html=True)
-                
-                col1, col2, col3 = st.columns([1, 1, 2])
-                
-                with col1:
-                    if st.button(f"▶️ Play Scene", key=f"play_{i}"):
-                        st.session_state.selected_scene = result
-                        st.session_state.current_video_id = result.get('video_id')
-                
-                with col2:
-                    relevance = result.get('relevance_score', 0)
-                    st.metric("Relevance", f"{relevance:.1%}")
-                
-                with col3:
-                    # Feedback buttons
-                    col_helpful, col_not_helpful = st.columns(2)
-                    with col_helpful:
-                        if st.button("👍 Helpful", key=f"helpful_{i}"):
-                            self.submit_feedback(result, True)
-                    with col_not_helpful:
-                        if st.button("👎 Not Helpful", key=f"not_helpful_{i}"):
-                            self.submit_feedback(result, False)
-                
-                st.markdown("---")
+        # Try to get video metadata and file path
+        video_metadata = None
+        if video_id:
+            try:
+                video_metadata = self.api_client.get_video(video_id)
+            except Exception as e:
+                st.error(f"Error loading video metadata: {str(e)}")
         
-        # Suggestions for follow-up
-        if results.get('suggestions'):
-            st.markdown("### 💡 You might also be interested in:")
-            for suggestion in results['suggestions']:
-                if st.button(f"🔍 {suggestion}", key=f"followup_{hash(suggestion)}"):
-                    st.session_state.search_query = suggestion
-                    st.rerun()
+        # Render the video player with enhanced functionality
+        self.video_player.render_player(scene, video_metadata)
         
-        # Selected scene player
-        if st.session_state.selected_scene:
-            st.markdown("### 🎥 Selected Scene")
-            self.video_player.render_player(st.session_state.selected_scene)
+        st.markdown('</div>', unsafe_allow_html=True)
     
     def render_upload_page(self):
         """Render video upload page"""
@@ -450,13 +438,17 @@ class VideoLearningApp:
                         st.metric("Confidence", f"{scene.get('confidence_score', 0):.1%}")
                     with col2:
                         if st.button(f"▶️ Play Scene {i+1}", key=f"play_scene_{video_id}_{i}"):
-                            st.session_state.selected_scene = {
+                            # Create scene data in the format expected by video player
+                            scene_data = {
                                 'video_id': video_id,
                                 'scene_id': scene.get('id'),
                                 'start_time': scene.get('start_time', 0),
                                 'end_time': scene.get('end_time', 30),
-                                'scene': scene
+                                'scene': scene,
+                                'video_title': f"Video {video_id}"  # You might want to get actual title
                             }
+                            st.session_state.selected_scene = scene_data
+                            st.rerun()
                             
         except Exception as e:
             st.error(f"Error loading scenes: {str(e)}")

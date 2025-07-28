@@ -3,7 +3,7 @@ from openai import AsyncOpenAI
 from typing import List, Dict, Any, Optional
 import asyncio
 from config import settings
-
+import os
 class LLMService:
     """
     Service for interacting with Large Language Models (OpenAI GPT)
@@ -11,6 +11,25 @@ class LLMService:
     """
     
     def __init__(self):
+        # Debug: Print environment loading
+        print(f"Loading OpenAI API key from settings...")
+        print(f"Settings OPENAI_API_KEY exists: {bool(settings.OPENAI_API_KEY)}")
+        print(f"Settings OPENAI_API_KEY length: {len(settings.OPENAI_API_KEY) if settings.OPENAI_API_KEY else 0}")
+        
+        # Also check direct environment variable
+        env_key = os.getenv('OPENAI_API_KEY')
+        print(f"Direct env OPENAI_API_KEY exists: {bool(env_key)}")
+        print(f"Direct env OPENAI_API_KEY length: {len(env_key) if env_key else 0}")
+        
+        # Check if they match
+        if settings.OPENAI_API_KEY != env_key:
+            print("WARNING: Settings key differs from environment variable!")
+        
+        # Print first and last few characters for verification (safely)
+        if settings.OPENAI_API_KEY:
+            key_preview = f"{settings.OPENAI_API_KEY[:8]}...{settings.OPENAI_API_KEY[-8:]}"
+            print(f"Key preview: {key_preview}")
+        
         self.client = AsyncOpenAI(api_key=settings.OPENAI_API_KEY)
         self.model = settings.LLM_MODEL
         self.temperature = settings.LLM_TEMPERATURE

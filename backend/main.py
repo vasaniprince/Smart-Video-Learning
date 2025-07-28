@@ -31,7 +31,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Include routers
+# Include routers - FIXED: Remove prefix since it's already defined in the routers
 app.include_router(videos_router)
 app.include_router(search_router)
 
